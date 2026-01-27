@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Route Planner Free</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; }
+        .main-container { display: flex; gap: 20px; max-width: 1200px; margin: 0 auto; height: 90vh; }
+        
+        /* Sidebar Styles */
+        .sidebar { width: 350px; display: flex; flex-direction: column; gap: 10px; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        textarea { padding: 10px; border: 1px solid #ccc; border-radius: 6px; resize: vertical; min-height: 100px; font-family: monospace; }
+        
+        /* Buttons */
+        .btn-group { display: flex; gap: 10px; }
+        button { padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; color: white; flex: 1; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        .btn-add { background: #10b981; max-height: 35.5px; }
+        .btn-opt { background: #2563eb; }
+        .btn-clr { background: #ef4444; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+
+        /* Error Box (The new feature) */
+        #error-box { 
+            display: none; /* Hidden by default */
+            background: #fef2f2; 
+            border: 1px solid #ef4444; 
+            border-radius: 6px; 
+            padding: 10px;
+        }
+        #error-box h4 { margin: 0 0 5px 0; color: #b91c1c; font-size: 14px; }
+        #failed-list { margin: 0; padding-left: 20px; color: #b91c1c; font-size: 13px; }
+
+        /* Success List */
+        #stop-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex-grow: 1; border-top: 1px solid #eee; margin-top: 5px; }
+        #stop-list li { padding: 10px; border-bottom: 1px solid #f0f0f0; font-size: 14px; display: flex; align-items: center; gap: 10px; }
+        .badge { background: #e5e7eb; color: #374151; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+        
+        #map { flex-grow: 1; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        #status { font-size: 12px; color: #666; min-height: 15px; }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div class="sidebar">
+        <h2 style="margin: 0 0 10px 0; color: #1f2937;">Route Planner</h2>
+        
+        <textarea id="bulk-input" placeholder="Paste addresses (one per line)..."></textarea>
+        
+        <div id="status"></div>
+
+        <button onclick="processBulkAddresses()" class="btn-add" id="btn-add">Add List</button>
+
+        <div id="error-box">
+            <h4>⚠️ Not Found (Check spelling):</h4>
+            <ul id="failed-list"></ul>
+        </div>
+        
+        <div class="btn-group">
+            <button onclick="handleOptimize()" class="btn-opt" id="btn-opt">Optimize</button>
+            <button onclick="clearAll()" class="btn-clr">Clear</button>
+            <button onclick="copyToClipboard()" class="btn-opt" style="background: #4b5563;">Copy List</button>
+        </div>
+
+        <ul id="stop-list"></ul>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const map = L.map('map').setView([1.3521, 103.8198], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let stopData = []; 
+    let failedStops = []; // NEW: Track failed addresses
+    let routeLayer = null;
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    async function processBulkAddresses() {
+        const textarea = document.getElementById('bulk-input');
+        const statusDiv = document.getElementById('status');
+        const addButton = document.getElementById('btn-add');
+        
+        // --- ADD THESE TWO LINES ---
+        failedStops = [];      // Clear the old failed addresses
+        updateErrorBox();      // Hide the error box from the previous run
+        // ---------------------------
+
+        const lines = textarea.value.split('\n').filter(line => line.trim() !== "");
+        if (lines.length === 0) return alert("Paste addresses first!");
+
+        addButton.disabled = true;
+        addButton.innerText = "Processing...";
+
+        for (let i = 0; i < lines.length; i++) {
+            const address = lines[i].trim();
+            statusDiv.innerText = `Searching (${i + 1}/${lines.length}): ${address}...`;
+            
+            await addSingleAddress(address);
+            
+            if (i < lines.length - 1) await sleep(1100);
+        }
+
+        statusDiv.innerText = "Done!";
+        addButton.disabled = false;
+        addButton.innerText = "Add List";
+        textarea.value = ""; 
+    }
+
+    async function addSingleAddress(addressText) {
+        try {
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressText)}&countrycodes=sg&limit=1`;
+            const response = await fetch(url, { headers: { 'User-Agent': 'EZRoutePlanner/1.0' } });
+            const data = await response.json();
+
+            if (data.length > 0) {
+                const { lat, lon, display_name } = data[0];
+                const marker = L.marker([lat, lon]).addTo(map).bindPopup(display_name);
+                
+                stopData.push({ 
+                    lat: parseFloat(lat), 
+                    lon: parseFloat(lon), 
+                    name: display_name, 
+                    originalQuery: addressText, 
+                    marker 
+                });
+                updateSidebar();
+            } else {
+                // This appends to the existing list, making it permanent 
+                // until "Clear All" is pressed.
+                if (!failedStops.includes(addressText)) {
+                    failedStops.push(addressText);
+                }
+                updateErrorBox();
+            }
+        } catch (error) {
+            console.error(error);
+            failedStops.push(addressText + " (Network Error)");
+            updateErrorBox();
+        }
+    }
+
+    function updateErrorBox() {
+        const box = document.getElementById('error-box');
+        const list = document.getElementById('failed-list');
+        
+        if (failedStops.length > 0) {
+            box.style.display = "block"; 
+            // Use map to create the list, but don't clear old ones
+            list.innerHTML = failedStops.map(addr => `<li>${addr}</li>`).join('');
+        } else {
+            box.style.display = "none";
+        }
+    }
+
+    function updateSidebar() {
+        const list = document.getElementById('stop-list');
+        list.innerHTML = stopData.map((stop, index) => `
+            <li>
+                <span class="badge">${index + 1}</span>
+                <div>
+                    <strong>${stop.originalQuery}</strong><br>
+                    <small style="color:#666">${stop.name.split(',').slice(0,2).join(',')}</small>
+                </div>
+            </li>
+        `).join('');
+    }
+
+    async function handleOptimize() {
+        if (stopData.length < 2) return alert("Add at least 2 stops!");
+        const optimizeBtn = document.getElementById('btn-opt');
+        optimizeBtn.innerText = "Calculating...";
+        
+        stopData = optimizeRoute(stopData); 
+        const roundTrip = [...stopData, stopData[0]];
+        
+        updateSidebar();
+        if (routeLayer) map.removeLayer(routeLayer);
+        await drawRoute(roundTrip);
+        
+        optimizeBtn.innerText = "Optimize";
+    }
+
+    function optimizeRoute(points) {
+        let optimizedOrder = [];
+        let remainingPoints = [...points];
+        let currentPoint = remainingPoints.shift();
+        optimizedOrder.push(currentPoint);
+
+        while (remainingPoints.length > 0) {
+            let nearestIndex = 0;
+            let shortestDistance = Infinity;
+
+            for (let i = 0; i < remainingPoints.length; i++) {
+                let d = Math.sqrt(
+                    Math.pow(currentPoint.lat - remainingPoints[i].lat, 2) + 
+                    Math.pow(currentPoint.lon - remainingPoints[i].lon, 2)
+                );
+                if (d < shortestDistance) {
+                    shortestDistance = d;
+                    nearestIndex = i;
+                }
+            }
+            currentPoint = remainingPoints.splice(nearestIndex, 1)[0];
+            optimizedOrder.push(currentPoint);
+        }
+        return optimizedOrder;
+    }
+
+    async function drawRoute(optimizedPoints) {
+        const coordString = optimizedPoints.map(p => `${p.lon},${p.lat}`).join(';');
+        const url = `https://router.project-osrm.org/route/v1/driving/${coordString}?overview=full&geometries=geojson`;
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            if (data.code === 'Ok') {
+                const routeCoordinates = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                routeLayer = L.polyline(routeCoordinates, {
+                    color: '#2563eb',
+                    weight: 6,
+                    opacity: 0.8,
+                    fillColor: '#ffffff',
+                    stroke: true,
+                }).addTo(map);
+                map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+            }
+        } catch (error) { console.error("Routing error:", error); }
+    }
+
+    function clearAll() {
+        stopData.forEach(stop => map.removeLayer(stop.marker));
+        if (routeLayer) map.removeLayer(routeLayer);
+        
+        stopData = [];
+        failedStops = []; // Clear errors too
+        
+        updateSidebar();
+        updateErrorBox(); // This will hide the red box since array is empty
+        document.getElementById('status').innerText = "";
+    }
+
+    function copyToClipboard() {
+        if (stopData.length === 0) return alert("No addresses to copy!");
+
+        // Create a numbered list string
+        const listString = stopData.map((stop, index) => `${index + 1}. ${stop.originalQuery}`).join('\n');
+
+        // Use the clipboard API
+        navigator.clipboard.writeText(listString).then(() => {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerText = "✅ List copied to clipboard!";
+            setTimeout(() => statusDiv.innerText = "", 3000);
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+        });
+    }
+</script>
+
+</body>
+</html>
