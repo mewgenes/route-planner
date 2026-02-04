@@ -7,11 +7,9 @@
         body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; }
         .main-container { display: flex; gap: 20px; max-width: 1200px; margin: 0 auto; height: 90vh; }
         
-        /* Sidebar Styles */
         .sidebar { width: 350px; display: flex; flex-direction: column; gap: 10px; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
         textarea { padding: 10px; border: 1px solid #ccc; border-radius: 6px; resize: vertical; min-height: 100px; font-family: monospace; }
         
-        /* Buttons */
         .btn-group { display: flex; gap: 10px; }
         button { padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; color: white; flex: 1; transition: opacity 0.2s; }
         button:hover { opacity: 0.9; }
@@ -20,9 +18,8 @@
         .btn-clr { background: #ef4444; }
         button:disabled { background: #ccc; cursor: not-allowed; }
 
-        /* Error Box (The new feature) */
         #error-box { 
-            display: none; /* Hidden by default */
+            display: none;
             background: #fef2f2; 
             border: 1px solid #ef4444; 
             border-radius: 6px; 
@@ -31,7 +28,6 @@
         #error-box h4 { margin: 0 0 5px 0; color: #b91c1c; font-size: 14px; }
         #failed-list { margin: 0; padding-left: 20px; color: #b91c1c; font-size: 13px; }
 
-        /* Success List */
         #stop-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex-grow: 1; border-top: 1px solid #eee; margin-top: 5px; }
         #stop-list li { padding: 10px; border-bottom: 1px solid #f0f0f0; font-size: 14px; display: flex; align-items: center; gap: 10px; }
         .badge { background: #e5e7eb; color: #374151; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
@@ -77,7 +73,7 @@
     }).addTo(map);
 
     let stopData = []; 
-    let failedStops = []; // NEW: Track failed addresses
+    let failedStops = [];
     let routeLayer = null;
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -87,10 +83,8 @@
         const statusDiv = document.getElementById('status');
         const addButton = document.getElementById('btn-add');
         
-        // --- ADD THESE TWO LINES ---
-        failedStops = [];      // Clear the old failed addresses
-        updateErrorBox();      // Hide the error box from the previous run
-        // ---------------------------
+        failedStops = [];
+        updateErrorBox();
 
         const lines = textarea.value.split('\n').filter(line => line.trim() !== "");
         if (lines.length === 0) return alert("Paste addresses first!");
@@ -132,8 +126,6 @@
                 });
                 updateSidebar();
             } else {
-                // This appends to the existing list, making it permanent 
-                // until "Clear All" is pressed.
                 if (!failedStops.includes(addressText)) {
                     failedStops.push(addressText);
                 }
@@ -152,7 +144,6 @@
         
         if (failedStops.length > 0) {
             box.style.display = "block"; 
-            // Use map to create the list, but don't clear old ones
             list.innerHTML = failedStops.map(addr => `<li>${addr}</li>`).join('');
         } else {
             box.style.display = "none";
@@ -239,20 +230,28 @@
         if (routeLayer) map.removeLayer(routeLayer);
         
         stopData = [];
-        failedStops = []; // Clear errors too
+        failedStops = [];
         
         updateSidebar();
-        updateErrorBox(); // This will hide the red box since array is empty
+        updateErrorBox();
         document.getElementById('status').innerText = "";
+    }
+
+    function saveToLocal() {
+        const dataToSave = stopData.map(stop => ({
+            lat: stop.lat,
+            lon: stop.lon,
+            name: stop.name,
+            originalQuery: stop.originalQuery
+        }));
+        localStorage.setItem('mySavedRoute', JSON.stringify(dataToSave));
     }
 
     function copyToClipboard() {
         if (stopData.length === 0) return alert("No addresses to copy!");
 
-        // Create a numbered list string
         const listString = stopData.map((stop, index) => `${index + 1}. ${stop.originalQuery}`).join('\n');
 
-        // Use the clipboard API
         navigator.clipboard.writeText(listString).then(() => {
             const statusDiv = document.getElementById('status');
             statusDiv.innerText = "✅ List copied to clipboard!";
@@ -261,6 +260,21 @@
             console.error('Failed to copy: ', err);
         });
     }
+
+    window.onload = function() {
+        const saved = localStorage.getItem('mySavedRoute');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            parsed.forEach(item => {
+                const marker = L.marker([item.lat, item.lon]).addTo(map).bindPopup(item.name);
+                stopData.push({ ...item, marker });
+            });
+            updateSidebar();
+            if (stopData.length > 0) {
+                map.fitBounds(L.featureGroup(stopData.map(s => s.marker)).getBounds());
+            }
+        }
+    };
 </script>
 
 </body>
